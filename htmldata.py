@@ -1,7 +1,7 @@
 """
 Manipulate HTML or XHTML documents.
 
-Version 1.0.3.  This source code has been placed in the
+Version 1.0.4.  This source code has been placed in the
 public domain by Connelly Barnes.
 
 Features:
@@ -16,10 +16,15 @@ See the L{examples} for a quick start.
 
 """
 
-__version__ = '1.0.3'
+__version__ = '1.0.4'
 
 __all__ = ['examples', 'tagextract', 'tagjoin', 'urlextract',
            'urljoin', 'URLMatch']
+
+# Define True and False for Python < 2.2.
+import sys
+if sys.version_info[:3] < (2, 2, 0):
+  exec "True = 1; False = 0"
 
 # -------------------------------------------------------------------
 # Globals
@@ -121,7 +126,7 @@ def tagjoin(L):
   lowercased, C{key=value} pairs are sorted, and values are placed in
   double-quotes.
   """
-  if not isinstance(L, list):
+  if not isinstance(L, types.ListType):
     raise ValueError('expected list argument')
   ans = []
   for item in L:
@@ -615,9 +620,39 @@ _URL_TAGS = ['a href', 'applet archive', 'applet code',
 _URL_TAGS = map(lambda s: tuple(s.split()), _URL_TAGS)
 
 
+def _finditer(pattern, string):
+  """
+  Like C{re.finditer}, provided for compatibility with Python < 2.3.
+
+  Returns a list instead of an iterator.  Otherwise the return format
+  is identical to C{re.finditer} (except possibly in the details of
+  empty matches).
+  """
+  compiled = re.compile(pattern)
+  ans = []
+  start = 0
+
+  while True:
+    m = compiled.search(string, start)
+    if m:
+      ans.append(m)
+    else:
+      return ans
+
+    m_start = m.start(m.lastindex)
+    m_end   = m.end(m.lastindex)
+    if m_end > m_start:
+      start = m_end
+    else:
+      start += 1
+
 def urlextract(doc, siteurl=None, mimetype='text/html'):
   """
   Extract URLs from HTML or stylesheet.
+
+  Extracts only URLs that are linked to or embedded in the document.
+  Ignores plain text URLs that occur in the non-HTML part of the
+  document.
 
   Returns a list of L{URLMatch} objects.
 
@@ -648,11 +683,14 @@ def urlextract(doc, siteurl=None, mimetype='text/html'):
   if mimetype == 'text/css':
     # Match URLs within CSS stylesheet.
     # Match url(blah) or url("blah").
-    L = list(re.finditer(r'url\s*\(([^\r\n\("]*?)\)|' +
-                         r'url\s*\(\s*"([^\r\n]*?)"\s*\)', doc))
+    L = _finditer(r'url\s*\(([^\r\n\("]*?)\)|' +
+                  r'url\s*\(\s*"([^\r\n]*?)"\s*\)', doc)
     L = [(x.start(x.lastindex), x.end(x.lastindex)) for x in L]
-    L = [URLMatch(doc, s, e, siteurl, False, True) for (s, e) in L]
-    return L
+    ans = []
+    for (s, e) in L:
+      if e > s:
+        ans.append(URLMatch(doc, s, e, siteurl, False, True))
+    return ans
   else:
     # Match URLs within HTML document.
     ans = []
@@ -680,7 +718,7 @@ def urlextract(doc, siteurl=None, mimetype='text/html'):
       else:
         # Current item is a tag.
         for (a, b) in _URL_TAGS:
-          if item.name.startswith(a) and b in item.attrs:
+          if item.name.startswith(a) and b in item.attrs.keys():
             # Got one URL.
             url = item.attrs[b]
             # FIXME: Some HTML tag wants a URL list, look up which
