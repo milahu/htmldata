@@ -1,7 +1,7 @@
 """
 Manipulate HTML or XHTML documents.
 
-Version 1.0.2.  This source code has been placed in the
+Version 1.0.3.  This source code has been placed in the
 public domain by Connelly Barnes.
 
 Features:
@@ -10,8 +10,16 @@ Features:
    This allows you to read and write HTML documents
    programmably, with much flexibility.
  - Extract and modify URLs in an HTML document.
+ - Compatible with Python 2.2, 2.3, 2.4.
+
+See the L{examples} for a quick start.
 
 """
+
+__version__ = '1.0.3'
+
+__all__ = ['examples', 'tagextract', 'tagjoin', 'urlextract',
+           'urljoin', 'URLMatch']
 
 # -------------------------------------------------------------------
 # Globals
@@ -22,13 +30,18 @@ import shlex
 import string
 import urllib
 import urlparse
+import types
 
 # Translate text between these strings as plain text (not HTML).
 _IGNORE_TAGS = [('script', '/script'),
                ('style',  '/style')]
 
+# Special tags where we have to look for _END_X as part of the
+# HTML/XHTML parsing rules.
 _BEGIN_COMMENT = '<!--'
 _END_COMMENT   = '-->'
+_BEGIN_CDATA   = '<![CDATA['
+_END_CDATA     = ']]>'
 
 # -------------------------------------------------------------------
 # HTML <-> Data structure
@@ -38,7 +51,7 @@ def tagextract(doc):
   """
   Convert HTML to data structure.
 
-  Returns a list.  HTML tags become (name, keyword_dict) tuples
+  Returns a list.  HTML tags become C{(name, keyword_dict)} tuples
   within the list, while plain text becomes strings within the
   list.  All tag names are lowercased and stripped of whitespace.
   Tags which end with forward slashes have a single forward slash
@@ -47,25 +60,39 @@ def tagextract(doc):
 
   Example:
 
-  >>> tagextract('<img src=hi.gif alt="hi">foo<br><br/></body>')
-  [('img', {'src': 'hi.gif', 'alt': 'hi'}), 'foo',
-   ('br', {}), ('br/', {}), ('/body', {})]
+   >>> tagextract('<img src=hi.gif alt="hi">foo<br><br/></body>')
+   [('img', {'src': 'hi.gif', 'alt': 'hi'}), 'foo',
+    ('br', {}), ('br/', {}), ('/body', {})]
 
-  Text between '<script>' and '<style>' is rendered directly to plain
-  text. This prevents rogue '<' or '>' characters from interfering
-  with parsing.
+  Text between C{'<script>'} and C{'<style>'} is rendered directly to
+  plain text. This prevents rogue C{'<'} or C{'>'} characters from
+  interfering with parsing.
 
-  >>> tagextract('<script type="a"><blah>var x; </script>')
-  [('script', {'type': 'a'}), '<blah>var x; ', ('/script', {})]
+   >>> tagextract('<script type="a"><blah>var x; </script>')
+   [('script', {'type': 'a'}), '<blah>var x; ', ('/script', {})]
 
-  Text inside the comment strings '<!--' and '-->' is also rendered
-  as plain text.  Opening and closing comments are translated into
-  ('!--', {}) and ('--', {}), respectively.
+  Comment strings and XML directives are rendered as a single long
+  tag with no attributes.  The case of the tag "name" is not changed:
+  
+   >>> tagextract('<!-- blah -->')
+   [('!-- blah --', {})]
+   >>> tagextract('<?xml version="1.0" encoding="utf-8" ?>')
+   [('?xml version="1.0" encoding="utf-8" ?', {})]
+   >>> tagextract('<!DOCTYPE html PUBLIC etc...>')
+   [('!DOCTYPE html PUBLIC etc...', {})]
 
-  Example:
+  Greater-than and less-than characters occuring inside comments or
+  CDATA blocks are correctly kept as part of the block:
 
-  >>> tagextract('<!-- blah -->')
-  ['!--', ' blah ', '--']
+   >>> tagextract('<!-- <><><><>>..> -->')
+   [('!-- <><><><>>..> --', {})]
+   >>> tagextract('<!CDATA[[><>><>]<> ]]>')
+   [('!CDATA[[><>><>]<> ]]', {})]
+
+  Note that if one modifies these tags, it is important to retain the
+  C{"--"} (for comments) or C{"]]"} (for C{CDATA}) at the end of the
+  tag name, so that output from L{tagjoin} will be correct HTML/XHTML.
+
   """
   L = _full_tag_extract(doc)
   for i in range(len(L)):
@@ -81,22 +108,24 @@ def tagjoin(L):
   """
   Convert data structure back to HTML.
 
-  This reverses the tagextract() function.
+  This reverses the L{tagextract} function.
 
   More precisely, if an HTML string is turned into a data structure,
   then back into HTML, the resulting string will be functionally
   equivalent to the original HTML.
 
-  >>> tagjoin(tagextract(s))
-  (string that is functionally equivalent to s)
+   >>> tagjoin(tagextract(s))
+   (string that is functionally equivalent to s)
 
-  Three changes are made to the HTML by tagjoin(): tags are
-  lowercased, key=value pairs are sorted, and values are placed in
+  Three changes are made to the HTML by L{tagjoin}: tags are
+  lowercased, C{key=value} pairs are sorted, and values are placed in
   double-quotes.
   """
+  if not isinstance(L, list):
+    raise ValueError('expected list argument')
   ans = []
   for item in L:
-    if isinstance(item, str):
+    if isinstance(item, types.StringType):
       # Handle plain text.
       ans.append(item)
     elif item[0] == '--':
@@ -127,14 +156,22 @@ def tagjoin(L):
       ans.append('<' + name + tag_items + rslash + '>')
   return ''.join(ans)
 
+def _enumerate(L):
+  """
+  Like C{enumerate}, provided for compatibility with Python < 2.3.
+
+  Returns a list instead of an iterator.
+  """
+  return zip(range(len(L)),L)
+
 def _ignore_tag_index(s, i):
   """
-  Helper routine: Find index within _IGNORE_TAGS, or -1.
+  Helper routine: Find index within C{_IGNORE_TAGS}, or C{-1}.
 
-  If s[i:] begins with an opening tag from _IGNORE_TAGS, return the
-  index.  Otherwise, return -1.
+  If C{s[i:]} begins with an opening tag from C{_IGNORE_TAGS}, return
+  the index.  Otherwise, return C{-1}.
   """
-  for (j, (a, b)) in enumerate(_IGNORE_TAGS):
+  for (j, (a, b)) in _enumerate(_IGNORE_TAGS):
     if s[i:i+len(a)+1].lower() == '<' + a:
       return j
   return -1
@@ -143,20 +180,22 @@ def _html_split(s):
   """
   Helper routine: Split string into a list of tags and non-tags.
 
-  >>> html_split(' blah <tag text> more </tag stuff> ')
-  [' blah ', '<tag text>', ' more ', '</tag stuff>', ' ']
+   >>> html_split(' blah <tag text> more </tag stuff> ')
+   [' blah ', '<tag text>', ' more ', '</tag stuff>', ' ']
 
-  Tags begin with '<' and end with '>'.   Also, ''.join(L) == s.
+  Tags begin with C{'<'} and end with C{'>'}.
 
-  Special exceptions:
+  The identity C{''.join(L) == s} is always satisfied.
 
-  '<script>', '<style>', and HTML comment tags ignore all HTML
+  Exceptions to the normal parsing of HTML tags:
+
+  C{'<script>'}, C{'<style>'}, and HTML comment tags ignore all HTML
   until the closing pair, and are added as three elements:
 
-  >>> html_split(' blah<style><<<><></style><!-- hi -->' + \
-                 ' <script language="Javascript"></>a</script>end')
-  [' blah', '<style>', '<<<><>', '</style>', '<!--', ' hi ', '-->', \
-   ' ', '<script language="Javascript">', '</>a', '</script>', 'end']
+   >>> html_split(' blah<style><<<><></style><!-- hi -->' +
+   ...            ' <script language="Javascript"></>a</script>end')
+   [' blah', '<style>', '<<<><>', '</style>', '<!--', ' hi ', '-->',
+    ' ', '<script language="Javascript">', '</>a', '</script>', 'end']
 
   """
   s_lower = s.lower()
@@ -169,19 +208,26 @@ def _html_split(s):
       # Left bracket, handle various cases.
       if s[i:i+len(_BEGIN_COMMENT)].startswith(_BEGIN_COMMENT):
         # HTML begin comment tag, '<!--'.  Scan for '-->'.
-        L.append(_BEGIN_COMMENT)
-        i += len(_BEGIN_COMMENT)
         i2 = s.find(_END_COMMENT, i)
         if i2 < 0:
-          # No '-->'.  Append the rest as text.
+          # No '-->'.  Append the remaining malformed content and stop.
           L.append(s[i:])
           break
         else:
-          # Append the comment text.
-          L.append(s[i:i2])
-          # Then append the '-->' as a tag.
-          L.append(s[i2:i2+len(_END_COMMENT)])
+          # Append the comment.
+          L.append(s[i:i2+len(_END_COMMENT)])
           i = i2 + len(_END_COMMENT)
+      elif s[i:i+len(_BEGIN_CDATA)].startswith(_BEGIN_CDATA):
+        # XHTML begin CDATA tag.  Scan for ']]>'.
+        i2 = s.find(_END_CDATA, i)
+        if i2 < 0:
+          # No ']]>'.  Append the remaining malformed content and stop.
+          L.append(s[i:])
+          break
+        else:
+          # Append the CDATA.
+          L.append(s[i:i2+len(_END_CDATA)])
+          i = i2 + len(_END_CDATA)
       else:
         # Regular HTML tag.  Scan for '>'.
         orig_i = i
@@ -224,17 +270,19 @@ def _html_split(s):
 
 def _shlex_split(s):
   """
-  Like shlex.split(), but reversible, and for HTML.
+  Like C{shlex.split}, but reversible, and for HTML.
 
-  Splits a string into a list 'L' of strings.  List elements
-  contain either an HTML tag name=value pair, an HTML name
-  singleton (eg 'checked'), or whitespace.  ''.join(L) == s.
+  Splits a string into a list C{L} of strings.  List elements
+  contain either an HTML tag C{name=value} pair, an HTML name
+  singleton (eg C{"checked"}), or whitespace.
 
-  >>> _shlex_split('a=5 b="15" name="Georgette A"')
-  ['a=5', ' ', 'b="15"', ' ', 'name="Georgette A"']
+  The identity C{''.join(L) == s} is always satisfied.
 
-  >>> _shlex_split('a = a5 b=#b19 name="foo bar" q="hi"')
-  ['a = a5', ' ', 'b=#b19', ' ', 'name="foo bar"', ' ', 'q="hi"']
+   >>> _shlex_split('a=5 b="15" name="Georgette A"')
+   ['a=5', ' ', 'b="15"', ' ', 'name="Georgette A"']
+
+   >>> _shlex_split('a = a5 b=#b19 name="foo bar" q="hi"')
+   ['a = a5', ' ', 'b=#b19', ' ', 'name="foo bar"', ' ', 'q="hi"']
   """
 
   ans = []
@@ -279,7 +327,7 @@ def _shlex_split(s):
   
 def _test_shlex_split():
   """
-  Unit test for _shlex_split().
+  Unit test for L{_shlex_split}.
   """
   assert _shlex_split('') == []
   assert _shlex_split(' ') == [' ']
@@ -296,22 +344,22 @@ def _test_shlex_split():
 
 def _tag_dict(s):
   """
-  Helper routine: Extracts dict from an HTML tag string.
+  Helper routine: Extracts a dict from an HTML tag string.
 
-  >>> _tag_dict('bgcolor=#ffffff text="#000000" blink')
-  ({'bgcolor':'#ffffff', 'text':'#000000', 'blink': None},
-   {'bgcolor':(0,7),  'text':(16,20), 'blink':(31,36)},
-   {'bgcolor':(8,15), 'text':(22,29), 'blink':(36,36)})
+   >>> _tag_dict('bgcolor=#ffffff text="#000000" blink')
+   ({'bgcolor':'#ffffff', 'text':'#000000', 'blink': None},
+    {'bgcolor':(0,7),  'text':(16,20), 'blink':(31,36)},
+    {'bgcolor':(8,15), 'text':(22,29), 'blink':(36,36)})
 
   Returns a 3-tuple.  First element is a dict of
-  (key, value) pairs from the HTML tag.  Second element 
-  is a dict mapping keys to (start, end) indices of the
-  key in the text.  Third element maps keys to (start, end)
+  C{(key, value)} pairs from the HTML tag.  Second element 
+  is a dict mapping keys to C{(start, end)} indices of the
+  key in the text.  Third element maps keys to C{(start, end)}
   indices of the value in the text.
 
   Names are lowercased.
 
-  Raises ValueError for unmatched quotes and other errors.
+  Raises C{ValueError} for unmatched quotes and other errors.
   """
   d = _shlex_split(s)
   attrs     = {}
@@ -357,7 +405,7 @@ def _tag_dict(s):
 
 def _test_tag_dict():
   """
-  Unit test for _tag_dict().
+  Unit test for L{_tag_dict}.
   """
   assert _tag_dict('') == ({}, {}, {})
   assert _tag_dict(' \t\r \n\n \r\n  ') == ({}, {}, {})
@@ -368,16 +416,16 @@ def _test_tag_dict():
   s = ' \r\nbg = val text \t= "hi you" name\t e="5"\t\t\t\n'
   (a, b, c) = _tag_dict(s)
   assert a == {'text': 'hi you', 'bg': 'val', 'e': '5', 'name': None}
-  for key in a:
+  for key in a.keys():
     assert s[b[key][0]:b[key][1]] == key
     if a[key] != None:
       assert s[c[key][0]:c[key][1]] == a[key]
 
 def _full_tag_extract(s):
   """
-  Like tagextract(), but different return format.
+  Like L{tagextract}, but different return format.
 
-  Returns a list of _HTMLTag and _TextTag instances.
+  Returns a list of L{_HTMLTag} and L{_TextTag} instances.
 
   The return format is very inconvenient for manipulating HTML, and
   only will be useful if you want to find the exact locations where
@@ -392,7 +440,7 @@ def _full_tag_extract(s):
 
   class NotTagError(Exception): pass
 
-  for (i, text) in enumerate(L):
+  for (i, text) in _enumerate(L):
     try:
 
       # Is it an HTML tag?
@@ -400,14 +448,19 @@ def _full_tag_extract(s):
       if len(text) >= 2 and text[0] == '<' and text[-1] == '>':
         # Turn HTML tag text into (name, keyword_dict) tuple.
         is_tag = True
-      elif text == _BEGIN_COMMENT or text == _END_COMMENT:
-        is_tag = True
 
-      # Ignore text that looks like an HTML tag inside a comment.
-      if len(L) > 0 and i > 0 and L[i - 1] == ('!--', {}):
-        is_tag = False
+      is_special = False
+      if len(text) >= 2 and (text[1] == '!' or text[1] == '?'):
+        is_special = True
 
-      if is_tag:
+      if is_special:
+        # A special tag such as XML directive or <!-- comment -->
+        pos = (Lstart[i], Lstart[i] + len(L[i]))
+
+        # Wrap inside an _HTMLTag object.
+        L[i] = _HTMLTag(pos, text[1:-1].strip(), {}, {}, {})
+
+      elif is_tag:
         # If an HTML tag, strip brackets and handle what's left.
 
         # Strip off '<>' and update offset.
@@ -434,7 +487,10 @@ def _full_tag_extract(s):
         # Position of dtext relative to original text.
         dtext_offset = len(name) + 1 + orig_offset    # +1 for space.
 
-        name  = name.strip().lower()
+        # Lowercase everything except XML directives and comments.
+        if not name.startswith('!') and not name.startswith('?'):
+          name = name.strip().lower()
+
         if rslash:
           name += '/'
 
@@ -445,7 +501,7 @@ def _full_tag_extract(s):
 
         (attrs, key_pos, value_pos) = _tag_dict(dtext)
         # Correct offsets in key_pos and value_pos.
-        for key in attrs:
+        for key in attrs.keys():
           key_pos[key]   = (key_pos[key][0]+Lstart[i]+dtext_offset,
                             key_pos[key][1]+Lstart[i]+dtext_offset)
           value_pos[key] = (value_pos[key][0]+Lstart[i]+dtext_offset,
@@ -467,23 +523,58 @@ def _full_tag_extract(s):
 
 
 class _HTMLTag:
-  """HTML tag extracted by _full_tag_extract()."""
-  pos       = property(doc="(start, end) indices of entire tag.")
-  name      = property(doc="Name of tag, eg 'img'.")
-  attrs     = property(doc="Attribute dict, eg {'href':'http:/X'}")
-  key_pos   = property(doc="""
-              Key position dict.
+  """
+  HTML tag extracted by L{_full_tag_extract}.
+  
+  @ivar pos:       C{(start, end)} indices of the entire tag in the
+                   HTML document.
+  @ivar name:      Name of tag.  For example, C{'img'}.
+  @ivar attrs:     Dictionary mapping tag attributes to corresponding
+                   tag values.  
 
-              Maps key to (start, end) indices of key.
-              """)
-  value_pos = property(doc="""
-              Value position dict.
+                   Example:
 
-              Maps key to (start, end) indices of attrs[key].
-              """)
+                    >>> tag = _full_tag_extract('<a href="d.com">')[0]
+                    >>> tag.attrs
+                    {'href': 'd.com'}
 
+                   Surrounding quotes are stripped from the values.
+  @ivar key_pos:   Key position dict.
+
+                   Maps the name of a tag attribute to C{(start, end)}
+                   indices for the key string in the C{"key=value"}
+                   HTML pair.  Indices are absolute, where 0 is the
+                   start of the HTML document.
+
+                   Example:
+
+                    >>> tag = _full_tag_extract('<a href="d.com">')[0]
+                    >>> tag.key_pos['href']
+                    (3, 7)
+                    >>> '<a href="d.com">'[3:7]
+                    'href'
+
+  @ivar value_pos: Value position dict.
+
+                   Maps the name of a tag attribute to C{(start, end)}
+                   indices for the value in the HTML document string.
+                   Surrounding quotes are excluded from this range.
+                   Indices are absolute, where 0 is the start of the
+                   HTML document.
+
+                   Example:
+
+                    >>> tag = _full_tag_extract('<a href="d.com">')[0]
+                    >>> tag.value_pos['href']
+                    (9, 14)
+                    >>> '<a href="d.com">'[9:14]
+                    'd.com'
+  """
+  
   def __init__(self, pos, name, attrs, key_pos, value_pos):
-    """Create an _HTMLTag object."""
+    """
+    Create an _HTMLTag object.
+    """
     self.pos       = pos
     self.name      = name
     self.attrs     = attrs
@@ -491,12 +582,17 @@ class _HTMLTag:
     self.value_pos = value_pos
 
 class _TextTag:
-  """Text extracted from an HTML document by _full_tag_extract()."""
-  text = property(doc="Extracted text.")
-  pos  = property(doc="(start, end) indices of text.")
+  """
+  Text extracted from an HTML document by L{_full_tag_extract}.
+
+  @ivar text:   Extracted text.
+  @ivar pos:    C{(start, end)} indices of the text.
+  """
 
   def __init__(self, pos, text):
-    """Create a _TextTag object."""
+    """
+    Create a _TextTag object.
+    """
     self.pos  = pos
     self.text = text
 
@@ -525,24 +621,28 @@ def urlextract(doc, siteurl=None, mimetype='text/html'):
 
   Returns a list of L{URLMatch} objects.
 
-  >>> L = urlextract('<img src="a.gif"><a href="www.google.com">')
-  >>> L[0].url
-  'a.gif'
-  >>> L[1].url
-  'www.google.com'
+   >>> L = urlextract('<img src="a.gif"><a href="www.google.com">')
+   >>> L[0].url
+   'a.gif'
+   >>> L[1].url
+   'www.google.com'
 
-  If siteurl is specified, all URLs are made into absolute URLs
-  by assuming that 'doc' is located at the URL 'siteurl'.
+  If C{siteurl} is specified, all URLs are made into absolute URLs
+  by assuming that C{doc} is located at the URL C{siteurl}.
 
-  >>> doc = '<img src="a.gif"><a href="/b.html">'
-  >>> L = urlextract(doc, 'http://www.python.org/~guido/')
-  >>> L[0].url
-  'http://www.python.org/~guido/a.gif'
-  >>> L[1].url
-  'http://www.python.org/b.html'
+   >>> doc = '<img src="a.gif"><a href="/b.html">'
+   >>> L = urlextract(doc, 'http://www.python.org/~guido/')
+   >>> L[0].url
+   'http://www.python.org/~guido/a.gif'
+   >>> L[1].url
+   'http://www.python.org/b.html'
 
-  If mimetype is 'text/css', the document will be parsed
+  If C{mimetype} is C{"text/css"}, the document will be parsed
   as a stylesheet.
+
+  If a stylesheet is embedded inside an HTML document, then
+  C{urlextract} will extract the URLs from both the HTML and the
+  stylesheet.
   """
   mimetype = mimetype.lower()
   if mimetype == 'text/css':
@@ -600,13 +700,14 @@ def _tuple_replace(s, Lindices, Lreplace):
   """
   Replace slices of a string with new substrings.
 
-  Given a list of slice tuples, replace those slices in 's'
-  with corresponding replacement substrings from 'Lreplace'.
+  Given a list of slice tuples in C{Lindices}, replace each slice
+  in C{s} with the corresponding replacement substring from
+  C{Lreplace}.
 
   Example:
 
-  >>> _tuple_replace('0123456789',[(4,5),(6,9)],['abc', 'def'])
-  '0123abc5def9'
+   >>> _tuple_replace('0123456789',[(4,5),(6,9)],['abc', 'def'])
+   '0123abc5def9'
   """
   ans = []
   Lindices = Lindices[:]
@@ -638,7 +739,7 @@ def _tuple_replace(s, Lindices, Lreplace):
 
 def _test_tuple_replace():
   """
-  Unit test for _tuple_replace().
+  Unit test for L{_tuple_replace}.
   """
   assert _tuple_replace('',[],[]) == ''
   assert _tuple_replace('0123456789',[],[]) == '0123456789'
@@ -650,54 +751,174 @@ def _test_tuple_replace():
 
 def urljoin(s, L):
   """
-  Write back document with modified URLs (reverses urlextract).
+  Write back document with modified URLs (reverses L{urlextract}).
 
-  Given a list 'L' of URLMatch objects obtained from
-  urlextract(), substitutes changed URLs into the original
-  document 's', and returns the modified document.  One should only
-  modify the .url attribute of the URLMatch objects.
+  Given a list C{L} of L{URLMatch} objects obtained from
+  L{urlextract}, substitutes changed URLs into the original
+  document C{s}, and returns the modified document.
 
-  >>> doc = '<img src="a.png"><a href="b.png">'
-  >>> L = urlextract(doc)
-  >>> L[0].url = 'foo'
-  >>> L[1].url = 'bar'
-  >>> urljoin(doc, L)
-  '<img src="foo"><a href="bar">'
+  One should only modify the C{.url} attribute of the L{URLMatch}
+  objects.  The ordering of the URLs in the list is not important.
+
+   >>> doc = '<img src="a.png"><a href="b.png">'
+   >>> L = urlextract(doc)
+   >>> L[0].url = 'foo'
+   >>> L[1].url = 'bar'
+   >>> urljoin(doc, L)
+   '<img src="foo"><a href="bar">'
   
   """
   return _tuple_replace(s, [(x.start, x.end) for x in L],            \
                            [x.url for x in L])
 
+
+def examples():
+  """
+  Examples of the C{htmldata} module.
+
+  Example 1:
+  Print all absolutized URLs from Google.
+ 
+  Here we use L{urlextract} to obtain all URLs in the document.
+
+   >>> import urllib2, htmldata
+   >>> url = 'http://www.google.com/'
+   >>> contents = urllib2.urlopen(url).read()
+   >>> for u in htmldata.urlextract(contents, url):
+   ...   print u.url
+   ...
+   http://www.google.com/images/logo.gif
+   http://www.google.com/search
+   (More output)
+
+  Note that the second argument to L{urlextract} causes the
+  URLs to be made absolute with respect to that base URL.
+
+  Example 2:
+  Print all image URLs from Google in relative form.
+
+   >>> import urllib2, htmldata
+   >>> url = 'http://www.google.com/'
+   >>> contents = urllib2.urlopen(url).read()
+   >>> for u in htmldata.urlextract(contents):
+   ...   if u.tag_name == 'img':
+   ...     print u.url
+   ...
+   /images/logo.gif
+
+  Equivalently, one can use L{tagextract}, and look for occurrences
+  of C{<img>} tags. The L{urlextract} function is mostly a convenience
+  function for when one wants to extract and/or modify all URLs in a
+  document.
+
+  Example 3:
+  Replace all C{<a href>} links on Google with the Microsoft web page.
+
+  Here we use L{tagextract} to turn the HTML into a data structure,
+  and then loop over the in-order list of tags (items which are not
+  tuples are plain text, which is ignored).
+
+   >>> import urllib2, htmldata
+   >>> url = 'http://www.google.com/'
+   >>> contents = urllib2.urlopen(url).read()
+   >>> L = htmldata.tagextract(contents)
+   >>> for item in L:
+   ...   if isinstance(item, tuple) and item[0] == 'a':
+   ...     # It's an HTML <a> tag!  Give it an href=.
+   ...     item[1]['href'] = 'http://www.microsoft.com/'
+   ...
+   >>> htmldata.tagjoin(L)
+   (Microsoftized version of Google)
+
+  Example 4:
+  Make all URLs on an HTML document be absolute.
+
+   >>> import urllib2, htmldata
+   >>> url = 'http://www.google.com/'
+   >>> contents = urllib2.urlopen(url).read()
+   >>> htmldata.urljoin(htmldata.urlextract(contents, url))
+   (Google HTML page with absolute URLs)
+
+  Example 5:
+  Properly quote all HTML tag values for pedants.
+
+   >>> import urllib2, htmldata
+   >>> url = 'http://www.google.com/'
+   >>> contents = urllib2.urlopen(url).read()
+   >>> htmldata.tagjoin(htmldata.tagextract(contents))
+   (Properly quoted version of the original HTML)
+
+  Example 6:
+  Modify all URLs in a document so that they are appended
+  to our proxy CGI script C{http://mysite.com/proxy.cgi}.
+
+   >>> import urllib2, htmldata
+   >>> url = 'http://www.google.com/'
+   >>> contents = urllib2.urlopen(url).read()
+   >>> proxy_url = 'http://mysite.com/proxy.cgi?url='
+   >>> L = htmldata.urlextract(contents)
+   >>> for u in L:
+   ...   u.url = proxy_url + u.url
+   ...
+   >>> htmldata.urljoin(L)
+   (Document with all URLs wrapped in our proxy script)
+
+  Example 7:
+  Download all images from a website.
+
+   >>> import urllib, htmldata, time
+   >>> url = 'http://www.google.com/'
+   >>> contents = urllib.urlopen(url).read()
+   >>> for u in htmldata.urlextract(contents, url):
+   ...   if u.tag_name == 'img':
+   ...     filename = urllib.quote_plus(u.url)
+   ...     urllib.urlretrieve(u.url, filename)
+   ...     time.sleep(0.5)
+   ...
+   (Images are downloaded to the current directory)
+
+  Many sites will protect against bandwidth-draining robots by
+  checking the HTTP C{Referer} [sic] and C{User-Agent} fields.
+  To circumvent this, one can create a C{urllib2.Request} object
+  with a legitimate C{Referer} and a C{User-Agent} such as
+  C{"Mozilla/4.0 (compatible; MSIE 5.5)"}.  Then use
+  C{urllib2.urlopen} to download the content.  Be warned that some
+  website operators will respond to rapid robot requests by banning
+  the offending IP address.
+
+  """
+  print examples.__doc__
+
 class URLMatch:
-  url     = property(doc="URL extracted.")
-  start   = property(doc="Starting character index.")
-  end     = property(doc="End character index.")
-  in_html = property(doc="True if URL occurs within an HTML tag.")
-  in_css  = property(doc="True if URL occurs within a stylesheet.")
+  """
+  A matched URL inside an HTML document or stylesheet.
 
-  tag_attr  = property(doc="""
-              Specific tag attribute in which URL occurs.
+  A list of C{URLMatch} objects is returned by L{urlextract}.
 
-              Example: 'href'.
-              None if the URL does not occur within an HTML tag.
-              """)
-  tag_attrs = property(doc="""
-              Dictionary of all tag attributes and values.
+  @ivar url:       URL extracted.
+  @ivar start:     Starting character index.
+  @ivar end:       End character index.
+  @ivar in_html:   C{True} if URL occurs within an HTML tag.
+  @ivar in_css:    C{True} if URL occurs within a stylesheet.
+  @ivar tag_attr:  Specific tag attribute in which URL occurs.
 
-              Example: {'src':'http://X','alt':'Img'}.
-              None if the URL does not occur within an HTML tag.
-              """)
-  tag_index = property(doc="""
-              Index of the tag in tagextract(doc).
+                   Example: C{'href'}.
+                   C{None} if the URL does not occur within an HTML
+                   tag.
+  @ivar tag_attrs: Dictionary of all tag attributes and values.
 
-              None if the URL does not occur within an HTML tag.
-              """)
-  tag_name  = property(doc="""
-              HTML tag name in which URL occurs.
+                   Example: C{{'src':'http://X','alt':'Img'}}.
+                   C{None} if the URL does not occur within an HTML
+                   tag.
+  @ivar tag_index: Index of the tag in the list that would be
+                   generated by a call to L{tagextract}.
+  @ivar tag_name:  HTML tag name in which URL occurs.
 
-              Example: 'img'.
-              None if the URL does not occur within an HTML tag.
-              """)
+                   Example: C{'img'}.
+                   C{None} if the URL does not occur within an HTML
+                   tag.
+
+  """
 
   def __init__(self, doc, start, end, siteurl, in_html, in_css,
                tag_attr=None, tag_attrs=None, tag_index=None,
@@ -715,7 +936,10 @@ class URLMatch:
     if siteurl != None:
       self.url = urlparse.urljoin(siteurl, self.url)
 
-    self.tag_attr = tag_attr
+    self.tag_attr  = tag_attr
+    self.tag_attrs = tag_attrs
+    self.tag_index = tag_index
+    self.tag_name  = tag_name
 
 # -------------------------------------------------------------------
 # Unit Tests: HTML <-> Data structure
@@ -723,7 +947,7 @@ class URLMatch:
 
 def _test_tagextract():
   """
-  Unit tests for tagextract() and tagjoin().
+  Unit tests for L{tagextract} and L{tagjoin}.
   """
 
   # Simple HTML document to test.
@@ -736,6 +960,9 @@ def _test_tagextract():
          '<script language="JavaScript"><>!><!_!_!-->!_-></script>'
   doc3 = '\r\t< html >< tag> <!--comment--> <tag a = 5> '     +      \
          '<foo \r\nbg = val text \t= "hi you" name\t e="5"\t\t\t\n>'
+  doc4 = '<?xml ??><foo><!-- <img> --><!DOCTYPE blah"""/>' +         \
+         '<![CDATA[ more and weirder<bar> ] ][]]><![C[DATA[[>' +     \
+         '<abc key=value><![CDATA[to eof'
 
   # -----------------------------------------------------------------
   # Test _html_split()
@@ -756,14 +983,14 @@ def _test_tagextract():
       '</h1 value=10 a=11>'
   assert s == ''.join(_html_split(s))
   assert _html_split(s) ==                                           \
-  ['<!--', ' test weird comment <body> <html> ', '-->', ' ',         \
+  ['<!-- test weird comment <body> <html> -->', ' ',                 \
    '<h1>', 'Header', '</h1 value=10 a=11>']
 
   s = '<!-- <!-- nested messed up --> blah ok <now> what<style>hi' + \
       '<><>></style><script language="Java"><aL><>><>></script>a'
   assert s == ''.join(_html_split(s))
   assert _html_split(s) ==                                           \
-  ['<!--', ' <!-- nested messed up ', '-->', ' blah ok ', '<now>',   \
+  ['<!-- <!-- nested messed up -->', ' blah ok ', '<now>',           \
    ' what', '<style>', 'hi<><>>', '</style>',                        \
    '<script language="Java">', '<aL><>><>>', '</script>', 'a']
 
@@ -772,10 +999,17 @@ def _test_tagextract():
       '</style<style>'
   assert s == ''.join(_html_split(s))
   assert _html_split(s) ==                                           \
-  ['<!--', ' ><# ', '-->', '!', '<!-!._->', '<!--', ' aa', '-->',    \
+  ['<!-- ><# -->', '!', '<!-!._->', '<!-- aa-->',                    \
    ' ', '<style>', '<tag//', '</style>', ' ', '<tag <tag <! <! ->',  \
-   ' ', '<!--', ' </who< <who> tag> <huh', '-->', '-', '</style>',   \
+   ' ', '<!-- </who< <who> tag> <huh-->', '-', '</style>',           \
    '</style<style>']
+
+  s = doc4
+  assert s == ''.join(_html_split(s))
+  assert _html_split(s) ==                                           \
+  ['<?xml ??>', '<foo>', '<!-- <img> -->', '<!DOCTYPE blah"""/>',    \
+   '<![CDATA[ more and weirder<bar> ] ][]]>', '<![C[DATA[[>',        \
+   '<abc key=value>', '<![CDATA[to eof']
 
   # -----------------------------------------------------------------
   # Test tagextract() and tagjoin()
@@ -800,16 +1034,16 @@ def _test_tagextract():
          '<test tag="5" content=6><is broken=False><yay>'     +      \
          '<style><><>><</style><foo bar=5>end<!-- <!-- nested --> '+ \
          '<script language="JavaScript"><>!><!_!_!-->!_-></script>'
-  assert doc2old == doc2 # FIXME
+  assert doc2old == doc2
 
   s = doc2
   assert tagextract(s) ==                                            \
-  ['\r', ('html', {}), ('!--', {}), ' Comment<a href="blah"> ',      \
-  ('--', {}), ('hiya', {}), ('foo', {}),                             \
+  ['\r', ('html', {}), ('!-- Comment<a href="blah"> --', {}),        \
+  ('hiya', {}), ('foo', {}),                                         \
   ('test', {'content': '6', 'tag': '5'}),                            \
   ('is', {'broken': 'False'}), ('yay', {}), ('style', {}), '<><>><', \
-  ('/style', {}), ('foo', {'bar': '5'}), 'end', ('!--', {}),         \
-  ' <!-- nested ', ('--', {}), ' ',                                  \
+  ('/style', {}), ('foo', {'bar': '5'}), 'end',                      \
+  ('!-- <!-- nested --', {}), ' ',                                   \
   ('script', {'language': 'JavaScript'}), ('>!><!_!_!-->!_-', {}),   \
   ('/script', {})]
 
@@ -825,9 +1059,9 @@ def _test_tagextract():
 
   for s in [doc1, doc2, doc3]:
     L = _full_tag_extract(s)
-    for (i, item) in enumerate(L):
+    for (i, item) in _enumerate(L):
       if isinstance(item, _HTMLTag):
-        for key in item.attrs:
+        for key in item.attrs.keys():
           assert s[item.key_pos[key][0]:item.key_pos[key][1]].lower()\
                  == key
           if item.attrs[key] != None:
@@ -842,13 +1076,52 @@ def _test_tagextract():
     assert L[i] == ('tag/',{'name':'5','value':'6afdjherknc4 cdk j', \
                            'a':'7', 'b':'8'})
 
+  # -----------------------------------------------------------------
+  # Test tagextract() and tagjoin() with XML directives.
+  # -----------------------------------------------------------------
+
+  doc1 =                                                             \
+  'a<?xml version="1.0"?>' +                                         \
+  'b<!DOCTYPE html' +                                                \
+  'PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"' +                \
+  '"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd" >c' +   \
+  '<html a=b><!-- Comment <><> hi! -->' +                            \
+  'z<![CDATA[ some content  ]]>rx' +                                 \
+  '<![C[DATA[ more and weirder ] ][]]>tt'
+
+  doc1join =                                                         \
+  'a<?xml version="1.0"?>b<!DOCTYPE htmlPUBLIC "-//W3C//DTD ' +      \
+  'XHTML 1.0 Transitional//EN""http://www.w3.org/TR/xhtml1/DTD/' +   \
+  'xhtml1-transitional.dtd">c<html a="b"><!-- Comment <><> hi! ' +   \
+  '-->z<![CDATA[ some content  ]]>rx<![C[DATA[ more and weirder ]' + \
+  ' ][]]>tt'
+
+  ans1 =                                                             \
+  ['a', ('?xml version="1.0"?', {}), 'b',                            \
+   ('!DOCTYPE html' +                                                \
+    'PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"' +              \
+    '"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"', {}),\
+    'c', ('html', {'a':'b'}), ('!-- Comment <><> hi! --', {}), 'z',  \
+    ('![CDATA[ some content  ]]', {}), 'rx',                         \
+    ('![C[DATA[ more and weirder ] ][]]', {}), 'tt']
+
+  assert tagextract('<?xml version="1.0" encoding="utf-8" ?>') ==    \
+         [('?xml version="1.0" encoding="utf-8" ?', {})]
+  assert tagextract('<!DOCTYPE html PUBLIC etc...>') ==              \
+         [('!DOCTYPE html PUBLIC etc...', {})]
+
+  assert tagextract(doc1) == ans1
+  
+  assert tagjoin(tagextract(doc1)) == doc1join
+
+
 # -------------------------------------------------------------------
 # Unit Tests: URL Parsing
 # -------------------------------------------------------------------
 
 def _test_urlextract():
   """
-  Unit tests for urlextract() and urljoin().
+  Unit tests for L{urlextract} and L{urljoin}.
   """
 
   doc1 = 'urlblah, url ( blah2, url( blah3) url(blah4) ' +           \
