@@ -1,7 +1,7 @@
 """
 Manipulate HTML or XHTML documents.
 
-Version 1.0.5.  This source code has been placed in the
+Version 1.0.6.  This source code has been placed in the
 public domain by Connelly Barnes.
 
 Features:
@@ -16,7 +16,7 @@ See the L{examples} for a quick start.
 
 """
 
-__version__ = '1.0.5'
+__version__ = '1.0.6'
 
 __all__ = ['examples', 'tagextract', 'tagjoin', 'urlextract',
            'urljoin', 'URLMatch']
@@ -734,11 +734,12 @@ def urlextract(doc, siteurl=None, mimetype='text/html'):
       r'''@import\s+([^ \t\r\n"';@\(\)]+)[^\r\n;@\(\)]*[\r\n;]|''' +
       r'''@import\s+'([^ \t\r\n"';@\(\)]+)'[^\r\n;@\(\)]*[\r\n;]|''' + 
       r'''@import\s+"([^ \t\r\n"';\(\)']+)"[^\r\n;@\(\)]*[\r\n;]''',
-      doc)
+      doc + ';\n')
 
     L = [(x.start(x.lastindex), x.end(x.lastindex)) for x in L]
     ans = []
     for (s, e) in L:
+      e = min(e, len(doc))
       if e > s:
         ans.append(URLMatch(doc, s, e, siteurl, False, True))
     return ans
@@ -768,6 +769,15 @@ def urlextract(doc, siteurl=None, mimetype='text/html'):
           pass
       else:
         # Current item is a tag.
+        if item.attrs.has_key('style'):
+          # Process a stylesheet embedded in the 'style' attribute.
+          temp = urlextract(item.attrs['style'], siteurl, 'text/css')
+          # Offset indices and add to ans.
+          for j in range(len(temp)):
+            temp[j].start += item.value_pos['style'][0]
+            temp[j].end   += item.value_pos['style'][0]
+          ans += temp
+
         for (a, b) in _URL_TAGS:
           if item.name.startswith(a) and b in item.attrs.keys():
             # Got one URL.
@@ -1238,6 +1248,8 @@ def _test_urlextract():
   doc4 = '@import foo handheld;\n@import \'bar\' handheld\n'      + \
          '@import url(\'foo2\') handheld; @import url(bar2) ha\n' + \
          '@import url("foo3") handheld\n'
+  doc5 = '<html><img src="a.gif" alt="b" style="url(\'foo\')">'   + \
+         '<a href = b.html name="c" style="@import \'bar.css\'">'
 
   # Test CSS.
   s = doc1
@@ -1304,6 +1316,13 @@ def _test_urlextract():
   '<img src="FOO">http://www.ignore.us/\nhttp://www.nowhere.com ' +  \
   '<style>url(h.gif) url(BAR) http://ignore.com/a</style>' +         \
   '<img alt="c" src = "a.gif"><img src=F00!>'
+
+  # Test HTML yet more.
+  s = doc5
+  L = urlextract(s)
+  L2 = [x.url for x in L]
+  assert L2 == ['foo', 'a.gif', 'bar.css', 'b.html']
+  assert [s[x.start:x.end] == x.url for x in L].count(False) == 0
 
 # -------------------------------------------------------------------
 # Unit Test Main Routine
