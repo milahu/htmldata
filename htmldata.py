@@ -1,7 +1,7 @@
 """
 Manipulate HTML documents via data structure.
 
-Version 1.0.0.  This source code has been placed in the
+Version 1.0.1.  This source code has been placed in the
 public domain by Connelly Barnes.
 """
 
@@ -193,6 +193,10 @@ def loads(s):
         is_tag = True
       elif text == BEGIN_COMMENT or text == END_COMMENT:
         is_tag = True
+
+      # Ignore text that looks like an HTML tag inside a comment.
+      if len(L) > 0 and i > 0 and L[i - 1] == ('!--', {}):
+        is_tag = False
 
       if is_tag:
         # If an HTML tag, strip brackets and handle what's left.
