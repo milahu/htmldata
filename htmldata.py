@@ -1,7 +1,7 @@
 """
 Manipulate HTML or XHTML documents.
 
-Version 1.0.4.  This source code has been placed in the
+Version 1.0.5.  This source code has been placed in the
 public domain by Connelly Barnes.
 
 Features:
@@ -10,13 +10,13 @@ Features:
    This allows you to read and write HTML documents
    programmably, with much flexibility.
  - Extract and modify URLs in an HTML document.
- - Compatible with Python 2.2, 2.3, 2.4.
+ - Compatible with Python 2.0 - 2.4.
 
 See the L{examples} for a quick start.
 
 """
 
-__version__ = '1.0.4'
+__version__ = '1.0.5'
 
 __all__ = ['examples', 'tagextract', 'tagjoin', 'urlextract',
            'urljoin', 'URLMatch']
@@ -288,6 +288,9 @@ def _shlex_split(s):
 
    >>> _shlex_split('a = a5 b=#b19 name="foo bar" q="hi"')
    ['a = a5', ' ', 'b=#b19', ' ', 'name="foo bar"', ' ', 'q="hi"']
+
+   >>> _shlex_split('a="9"b="15"')
+   ['a="9"', 'b="15"']
   """
 
   ans = []
@@ -306,7 +309,7 @@ def _shlex_split(s):
       i = i2
     else:
       # Match 'name = "value"'
-      c = re.compile(r'\S+\s*\=\s*"[^"]*"')
+      c = re.compile(r'[^ \t\n\r\f\v"]+\s*\=\s*"[^"]*"')
       m = c.match(s, i)
       if m:
         ans.append(s[i:m.end()])
@@ -346,6 +349,12 @@ def _test_shlex_split():
          [' ', 'a', ' ', 'b', ' ', 'c', ' ', 'd=e', ' ', 'f', '  ',  \
           'g', ' ', 'h', ' ', 'i="jk"', ' ', 'l', ' ', 'mno = p',    \
           '  ', 'qr = "st"']
+  assert _shlex_split('a=5 b="9"c="15 dfkdfkj "d="25"') ==           \
+         ['a=5', ' ', 'b="9"', 'c="15 dfkdfkj "', 'd="25"']
+  assert _shlex_split('a=5 b="9"c="15 dfkdfkj "d="25" e=4') ==       \
+         ['a=5', ' ', 'b="9"', 'c="15 dfkdfkj "', 'd="25"', ' ',     \
+          'e=4']
+  
 
 def _tag_dict(s):
   """
@@ -646,6 +655,40 @@ def _finditer(pattern, string):
     else:
       start += 1
 
+def _remove_comments(doc):
+  """
+  Replaces commented out characters with spaces in a CSS document.
+  """
+  ans = []
+  i = 0
+  while True:
+    i2 = doc.find('/*', i)
+    if i2 < 0:
+      ans += [doc[i:]]
+      break
+    ans += [doc[i:i2]]
+    i3 = doc.find('*/', i2+1)
+    if i3 < 0:
+      i3 = len(doc) - 2
+    ans += [' ' * (i3 - i2 + 2)]
+    i = i3 + 2
+
+  return ''.join(ans)
+
+def _test_remove_comments():
+  """
+  Unit test for L{_remove_comments}.
+  """
+  s = '/*d s kjlsdf */*//*/*//**/**/*//**/a' * 50
+  assert len(_remove_comments(s)) == len(s)
+  s = '/**/' * 50 + '/*5845*/*/*//*/**/dfd'+'/*//**//'
+  assert len(_remove_comments(s)) == len(s)
+  s = 'a/**/' * 50 + '/**//**/////***/****/*//**//*/' * 5
+  assert len(_remove_comments(s)) == len(s)
+  s = 'hi /* foo */ hello /* bar!!!!! \n\n */ there!'
+  assert _remove_comments(s) ==                                     \
+         'hi           hello                   there!'
+
 def urlextract(doc, siteurl=None, mimetype='text/html'):
   """
   Extract URLs from HTML or stylesheet.
@@ -681,10 +724,18 @@ def urlextract(doc, siteurl=None, mimetype='text/html'):
   """
   mimetype = mimetype.lower()
   if mimetype == 'text/css':
+    doc = _remove_comments(doc)
     # Match URLs within CSS stylesheet.
     # Match url(blah) or url("blah").
-    L = _finditer(r'url\s*\(([^\r\n\("]*?)\)|' +
-                  r'url\s*\(\s*"([^\r\n]*?)"\s*\)', doc)
+    L = _finditer(
+      r'''url\s*\(([^\r\n\("']*?)\)|''' +
+      r'''url\s*\(\s*"([^\r\n]*?)"\s*\)|''' +
+      r'''url\s*\(\s*'([^\r\n]*?)'\s*\)|''' +
+      r'''@import\s+([^ \t\r\n"';@\(\)]+)[^\r\n;@\(\)]*[\r\n;]|''' +
+      r'''@import\s+'([^ \t\r\n"';@\(\)]+)'[^\r\n;@\(\)]*[\r\n;]|''' + 
+      r'''@import\s+"([^ \t\r\n"';\(\)']+)"[^\r\n;@\(\)]*[\r\n;]''',
+      doc)
+
     L = [(x.start(x.lastindex), x.end(x.lastindex)) for x in L]
     ans = []
     for (s, e) in L:
@@ -1001,6 +1052,7 @@ def _test_tagextract():
   doc4 = '<?xml ??><foo><!-- <img> --><!DOCTYPE blah"""/>' +         \
          '<![CDATA[ more and weirder<bar> ] ][]]><![C[DATA[[>' +     \
          '<abc key=value><![CDATA[to eof'
+  doc5 = '<a href="foobar/ \t="base="10" x="15"><a x="9"t="20">'
 
   # -----------------------------------------------------------------
   # Test _html_split()
@@ -1091,6 +1143,14 @@ def _test_tagextract():
   '</style><foo bar="5">end<!-- <!-- nested --> ' +                  \
   '<script language="JavaScript"><>!><!_!_!-->!_-></script>'
 
+  s = doc5
+  assert tagextract(s) ==                                            \
+         [('a', {'href':'foobar/ \t=', 'base':'10', 'x':'15'}),      \
+          ('a', {'x':'9', 't':'20'})]
+  assert tagjoin(tagextract(s)) ==                                   \
+         '<a base="10" href="foobar/ \t=" x="15"><a t="20" x="9">'
+
+
   # -----------------------------------------------------------------
   # Test _full_tag_extract()
   # -----------------------------------------------------------------
@@ -1162,7 +1222,7 @@ def _test_urlextract():
   Unit tests for L{urlextract} and L{urljoin}.
   """
 
-  doc1 = 'urlblah, url ( blah2, url( blah3) url(blah4) ' +           \
+  doc1 = 'urlblah, url ( blah2, url( blah3) url(blah4) ' +          \
          'url("blah5") hum("blah6") url)"blah7"( url ( " blah8 " );;'
   doc2 = '<html><img src="a.gif" alt="b"><a href = b.html name='  + \
       '"c"><td background =  ./c.png width=100%><a value=/f.jpg>' + \
@@ -1170,12 +1230,36 @@ def _test_urlextract():
       '\nhttp://www.nowhere.com <style>url(h.gif) '               + \
       'url(http://www.testdomain.com/) http://ignore.com/a'       + \
       '</style><img alt="c" src = "a.gif"><img src=/i.png>'
+  doc3 = '@import foo;\n@import bar\n@import url(\'foo2\');'      + \
+         '@import url(\'http://bar2\')\n@import\turl("foo!");'    + \
+         '@import \'foo3\'\n@import "bar3";\n@importfails;'       + \
+         '@import;@import\n;url(\'howdy!\')\n@import  foo5 ;'     + \
+         '@import  \'foo6\' \n@import  "foo7";'
+  doc4 = '@import foo handheld;\n@import \'bar\' handheld\n'      + \
+         '@import url(\'foo2\') handheld; @import url(bar2) ha\n' + \
+         '@import url("foo3") handheld\n'
 
   # Test CSS.
   s = doc1
   L = urlextract(s, mimetype='text/css')
   L2 = [x.url for x in L]
   assert L2 == [' blah3', 'blah4', 'blah5', ' blah8 ']
+  assert [s[x.start:x.end] == x.url for x in L].count(False) == 0
+
+  # Test CSS more.
+  s = doc3
+  L = urlextract(s, mimetype='text/css')
+  L2 = [x.url for x in L]
+  assert L2 == ['foo', 'bar', 'foo2', 'http://bar2', 'foo!',    \
+                'foo3', 'bar3', 'howdy!', 'foo5', 'foo6', 'foo7']
+  assert [s[x.start:x.end] == x.url for x in L].count(False) == 0
+
+  # Test CSS even more.
+  s = doc4
+  L = urlextract(s, mimetype='text/css')
+  L2 = [x.url for x in L]
+  assert L2 == ['foo', 'bar', 'foo2', 'bar2', 'foo3']
+  assert [s[x.start:x.end] == x.url for x in L].count(False) == 0
 
   # Test HTML.
   s = doc2
@@ -1230,6 +1314,8 @@ def _test():
   Unit test main routine.
   """
   print 'Unit tests:'
+  _test_remove_comments()
+  print '  _remove_comments:       OK'
   _test_shlex_split()
   print '  _shlex_split:           OK'
   _test_tag_dict()
