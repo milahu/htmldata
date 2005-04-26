@@ -1,7 +1,7 @@
 """
 Manipulate HTML or XHTML documents.
 
-Version 1.0.6.  This source code has been placed in the
+Version 1.0.7.  This source code has been placed in the
 public domain by Connelly Barnes.
 
 Features:
@@ -16,7 +16,7 @@ See the L{examples} for a quick start.
 
 """
 
-__version__ = '1.0.6'
+__version__ = '1.0.7'
 
 __all__ = ['examples', 'tagextract', 'tagjoin', 'urlextract',
            'urljoin', 'URLMatch']
@@ -742,7 +742,6 @@ def urlextract(doc, siteurl=None, mimetype='text/html'):
       e = min(e, len(doc))
       if e > s:
         ans.append(URLMatch(doc, s, e, siteurl, False, True))
-    return ans
   else:
     # Match URLs within HTML document.
     ans = []
@@ -792,8 +791,15 @@ def urlextract(doc, siteurl=None, mimetype='text/html'):
             tag = URLMatch(doc, start, end, siteurl, True, False,    \
                            tag_attr, tag_attrs, tag_index, tag_name)
             ans.append(tag)
-    return ans
     # End of 'text/html' mimetype case.
+  # Filter the answer, removing duplicate matches.
+  start_end_map = {}
+  filtered_ans = []
+  for item in ans:
+    if not start_end_map.has_key((item.start, item.end)):
+      start_end_map[(item.start, item.end)] = None
+      filtered_ans.append(item)
+  return filtered_ans
 
 def _tuple_replace(s, Lindices, Lreplace):
   """
