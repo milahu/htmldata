@@ -1,7 +1,7 @@
 """
 Manipulate HTML or XHTML documents.
 
-Version 1.0.7.  This source code has been placed in the
+Version 1.0.8.  This source code has been placed in the
 public domain by Connelly Barnes.
 
 Features:
@@ -16,7 +16,7 @@ See the L{examples} for a quick start.
 
 """
 
-__version__ = '1.0.7'
+__version__ = '1.0.8'
 
 __all__ = ['examples', 'tagextract', 'tagjoin', 'urlextract',
            'urljoin', 'URLMatch']
@@ -316,6 +316,14 @@ def _shlex_split(s):
         i = m.end()
         continue
 
+      # Match 'name = \'value\''
+      c = re.compile(r'[^ \t\n\r\f\v\']+\s*\=\s*\'[^\']*\'')
+      m = c.match(s, i)
+      if m:
+        ans.append(s[i:m.end()])
+        i = m.end()
+        continue
+
       # Match 'name = value'
       c = re.compile(r'\S+\s*\=\s*\S*')
       m = c.match(s, i)
@@ -354,7 +362,10 @@ def _test_shlex_split():
   assert _shlex_split('a=5 b="9"c="15 dfkdfkj "d="25" e=4') ==       \
          ['a=5', ' ', 'b="9"', 'c="15 dfkdfkj "', 'd="25"', ' ',     \
           'e=4']
-  
+  assert _shlex_split('a=5 b=\'9\'c=\'15 dfkdfkj \'d=\'25\' e=4') == \
+         ['a=5', ' ', 'b=\'9\'', 'c=\'15 dfkdfkj \'', 'd=\'25\'',    \
+          ' ', 'e=4']
+
 
 def _tag_dict(s):
   """
@@ -395,8 +406,13 @@ def _tag_dict(s):
       while v1 < v2 and s[v1] in string.whitespace:   v1 += 1
       while v1 < v2 and s[v2-1] in string.whitespace: v2 -= 1
 
-      # Strip one pair of quotes around value.
+      # Strip one pair of double quotes around value.
       if v1 < v2 - 1 and s[v1] == '"' and s[v2-1] == '"':
+        v1 += 1
+        v2 -= 1
+
+      # Strip one pair of single quotes around value.
+      if v1 < v2 - 1 and s[v1] == "'" and s[v2-1] == "'":
         v1 += 1
         v2 -= 1
 
@@ -427,6 +443,10 @@ def _test_tag_dict():
     ({'bgcolor':'#ffffff', 'text':'#000000', 'blink': None},
      {'bgcolor':(0,7),  'text':(16,20), 'blink':(31,36)},
      {'bgcolor':(8,15), 'text':(22,29), 'blink':(36,36)})
+  assert _tag_dict("bgcolor='#ffffff'text='#000000' blink") ==        \
+    ({'bgcolor':'#ffffff', 'text':'#000000', 'blink': None},
+     {'bgcolor':(0,7),  'text':(17,21), 'blink':(32,37)},
+     {'bgcolor':(9,16), 'text':(23,30), 'blink':(37,37)})
   s = ' \r\nbg = val text \t= "hi you" name\t e="5"\t\t\t\n'
   (a, b, c) = _tag_dict(s)
   assert a == {'text': 'hi you', 'bg': 'val', 'e': '5', 'name': None}
@@ -726,7 +746,7 @@ def urlextract(doc, siteurl=None, mimetype='text/html'):
   if mimetype == 'text/css':
     doc = _remove_comments(doc)
     # Match URLs within CSS stylesheet.
-    # Match url(blah) or url("blah").
+    # Match url(blah) or url('blah') or url("blah").
     L = _finditer(
       r'''url\s*\(([^\r\n\("']*?)\)|''' +
       r'''url\s*\(\s*"([^\r\n]*?)"\s*\)|''' +
@@ -901,6 +921,7 @@ def examples():
 
   Example 2:
   Print all image URLs from Google in relative form.
+
 
    >>> import urllib2, htmldata
    >>> url = 'http://www.google.com/'
@@ -1085,6 +1106,10 @@ def _test_tagextract():
   s = doc2
   assert s == ''.join(_html_split(s))
 
+  # Test single quotes
+  s = doc2.replace('"', "'")
+  assert s == ''.join(_html_split(s))
+
   s = '<!-- test weird comment <body> <html> --> <h1>Header' +       \
       '</h1 value=10 a=11>'
   assert s == ''.join(_html_split(s))
@@ -1122,8 +1147,9 @@ def _test_tagextract():
   # -----------------------------------------------------------------
 
   s = doc1
+  s2 = doc1.replace('"', "'")   # Test single quotes, too.
   assert tagextract('') == []
-  assert tagextract(s) ==                                            \
+  assert tagextract(s) == tagextract(s2) ==                                           \
          ['\n\n', ('html', {}), ('body', {'bgcolor': '#ffffff'}),    \
           'Hi', ('h1', {}), 'Ho', ('/h1', {}), ('br', {}),           \
           ('br/', {}), ('img', {'src': 'text%5f.gif'}),              \
@@ -1171,7 +1197,9 @@ def _test_tagextract():
   # Test _full_tag_extract()
   # -----------------------------------------------------------------
 
-  for s in [doc1, doc2, doc3]:
+  for s in [doc1, doc2, doc3,
+            doc1.replace('"', "'"), doc2.replace('"', "'"),
+            doc3.replace('"', "'")]:
     L = _full_tag_extract(s)
     for (i, item) in _enumerate(L):
       if isinstance(item, _HTMLTag):
@@ -1214,6 +1242,7 @@ def _test_tagextract():
   ['a', ('?xml version="1.0"?', {}), 'b',                            \
    ('!DOCTYPE html' +                                                \
     'PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"' +              \
+
     '"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"', {}),\
     'c', ('html', {'a':'b'}), ('!-- Comment <><> hi! --', {}), 'z',  \
     ('![CDATA[ some content  ]]', {}), 'rx',                         \
@@ -1256,6 +1285,7 @@ def _test_urlextract():
          '@import url("foo3") handheld\n'
   doc5 = '<html><img src="a.gif" alt="b" style="url(\'foo\')">'   + \
          '<a href = b.html name="c" style="@import \'bar.css\'">'
+  doc6 = doc2.replace('"', "'")   # Test single quotes, too.
 
   # Test CSS.
   s = doc1
@@ -1283,10 +1313,11 @@ def _test_urlextract():
   s = doc2
   L = urlextract(s)
   L2 = [x.url for x in L]
+  L3 = [x.url for x in urlextract(doc6)]
   ans = ['a.gif', 'b.html', './c.png',                              \
                 'http://www.abc.edu/d.tga', 'h.gif',                \
                 'http://www.testdomain.com/', 'a.gif', '/i.png']
-  assert L2 == ans
+  assert L2 == L3 == ans
 
   for i in range(len(L)):
     assert s[L[i].start:L[i].end] == L[i].url
