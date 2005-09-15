@@ -1,7 +1,7 @@
 """
 Manipulate HTML or XHTML documents.
 
-Version 1.0.9.  This source code has been placed in the
+Version 1.1.0.  This source code has been placed in the
 public domain by Connelly Barnes.
 
 Features:
@@ -16,7 +16,7 @@ See the L{examples} for a quick start.
 
 """
 
-__version__ = '1.0.9'
+__version__ = '1.1.0'
 
 __all__ = ['examples', 'tagextract', 'tagjoin', 'urlextract',
            'urljoin', 'URLMatch']
@@ -257,8 +257,28 @@ def _html_split(s):
       else:
         # Regular HTML tag.  Scan for '>'.
         orig_i = i
-        i2 = s.find('>', i + 1)
-        if i2 < 0:
+        found = False
+        in_quot1 = False
+        in_quot2 = False
+        for i2 in xrange(i+1, len(s)):
+          c2 = s[i2]
+          if c2 == '"' and not in_quot1:
+            in_quot2 = not in_quot2
+            # Only turn on double quote if it's in a realistic place.
+            if in_quot2 and not in_quot1:
+              if i2 > 0 and s[i2-1] not in [' ', '\t', '=']:
+                in_quot2 = False
+          elif c2 == "'" and not in_quot2:
+            in_quot1 = not in_quot1
+            # Only turn on single quote if it's in a realistic place.
+            if in_quot1 and not in_quot2:
+              if i2 > 0 and s[i2-1] not in [' ', '\t', '=']:
+                in_quot1 = False
+          elif c2 == '>' and (not in_quot2 and not in_quot1):
+            found = True
+            break
+
+        if not found:
           # No end '>'.  Append the rest as text.
           L.append(s[i:])
           break
@@ -330,15 +350,15 @@ def _shlex_split(s):
       i = i2
     else:
       # Match 'name = "value"'
-      c = re.compile(r'[^ \t\n\r\f\v"]+\s*\=\s*"[^"]*"')
+      c = re.compile(r'[^ \t\n\r\f\v"\']+\s*\=\s*"[^"]*"')
       m = c.match(s, i)
       if m:
         ans.append(s[i:m.end()])
         i = m.end()
         continue
 
-      # Match 'name = \'value\''
-      c = re.compile(r'[^ \t\n\r\f\v\']+\s*\=\s*\'[^\']*\'')
+      # Match "name = 'value'"
+      c = re.compile(r'[^ \t\n\r\f\v"\']+\s*\=\s*\'[^\']*\'')
       m = c.match(s, i)
       if m:
         ans.append(s[i:m.end()])
@@ -346,7 +366,7 @@ def _shlex_split(s):
         continue
 
       # Match 'name = value'
-      c = re.compile(r'\S+\s*\=\s*\S*')
+      c = re.compile(r'[^ \t\n\r\f\v"\']+\s*\=\s*[^ \t\n\r\f\v"\']*')
       m = c.match(s, i)
       if m:
         ans.append(s[i:m.end()])
@@ -354,12 +374,29 @@ def _shlex_split(s):
         continue
 
       # Match 'name'
-      c = re.compile(r'\S+')
+      c = re.compile(r'[^ \t\n\r\f\v"\']+')
       m = c.match(s, i)
       if m:
         ans.append(s[i:m.end()])
         i = m.end()
         continue
+
+      # Couldn't match anything so far, so it's likely that the page
+      # has malformed quotes inside a tag.  Add leading quotes
+      # and spaces to the previous field until we see something.
+      subadd = []
+      while i < len(s) and s[i] in ['"', "'", ' ', '\t']:
+        subadd.append(s[i])
+        i += 1
+
+      # Add whatever we could salvage from the situation and move on.
+      if len(subadd) > 0:
+        ans.append(''.join(subadd))
+      else:
+        # We totally failed at matching this character, so add it
+        # as a separate item and move on.
+        ans.append(s[i])
+
   return ans
   
 def _test_shlex_split():
@@ -438,6 +475,13 @@ def _tag_dict(s):
         v2 -= 1
 
       (key, value) = (s[k1:k2].lower(), s[v1:v2])
+
+      # Drop bad keys and values.
+      if '"' in key or "'" in key:
+        continue
+      if '"' in value and "'" in value:
+        continue
+
       attrs[key] = value
       key_pos[key]   = (k1, k2)
       value_pos[key] = (v1, v2)
@@ -447,6 +491,11 @@ def _tag_dict(s):
     else:
       # A single token, like 'blink'.
       key = item.lower()
+
+      # Drop bad keys.
+      if '"' in key or "'" in key:
+        continue
+
       attrs[key]     = None
       key_pos[key]   = (start, end)
       value_pos[key] = (end, end)
@@ -1147,7 +1196,7 @@ def _test_tagextract(str_class=str):
          '<script language="JavaScript"><>!><!_!_!-->!_-></script>')
   doc3 = f('\r\t< html >< tag> <!--comment--> <tag a = 5> ' +
          '<foo \r\nbg = val text \t= "hi you" name\t e="5"\t\t\t\n>')
-  doc4 = f('<?xml ??><foo><!-- <img> --><!DOCTYPE blah"""/>' +
+  doc4 = f('<?xml ??><foo><!-- <img> --><!DOCTYPE blah""/>' +
          '<![CDATA[ more and weirder<bar> ] ][]]><![C[DATA[[>' +
          '<abc key=value><![CDATA[to eof')
   doc5 = f('<a href="foobar/ \t="base="10" x="15"><a x="9"t="20">')
@@ -1199,7 +1248,7 @@ def _test_tagextract(str_class=str):
   s = doc4
   assert s == f('').join(_html_split(s))
   assert _html_split(s) == f(
-  ['<?xml ??>', '<foo>', '<!-- <img> -->', '<!DOCTYPE blah"""/>',
+  ['<?xml ??>', '<foo>', '<!-- <img> -->', '<!DOCTYPE blah""/>',
    '<![CDATA[ more and weirder<bar> ] ][]]>', '<![C[DATA[[>',
    '<abc key=value>', '<![CDATA[to eof'])
 
