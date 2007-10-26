@@ -1,7 +1,7 @@
 """
 Manipulate HTML or XHTML documents.
 
-Version 1.1.0.  This source code has been placed in the
+Version 1.1.1.  This source code has been placed in the
 public domain by Connelly Barnes.
 
 Features:
@@ -10,13 +10,13 @@ Features:
    This allows you to read and write HTML documents
    programmably, with much flexibility.
  - Extract and modify URLs in an HTML document.
- - Compatible with Python 2.0 - 2.4.
+ - Compatible with Python 2.0 - 2.5.
 
 See the L{examples} for a quick start.
 
 """
 
-__version__ = '1.1.0'
+__version__ = '1.1.1'
 
 __all__ = ['examples', 'tagextract', 'tagjoin', 'urlextract',
            'urljoin', 'URLMatch']
@@ -581,7 +581,10 @@ def _full_tag_extract(s):
         else:
           rslash = False
 
-        first_space = text.find(' ')
+        m = re.search(r'\s', text)
+        first_space = -1
+        if m:
+          first_space = m.start()
         if first_space < 0:
           (name, dtext) = (text, '')
         else:
@@ -1255,6 +1258,10 @@ def _test_tagextract(str_class=str):
   # -----------------------------------------------------------------
   # Test tagextract() and tagjoin()
   # -----------------------------------------------------------------
+
+  # Test for whitespace handling in tags.
+  assert (tagextract('<a\n\t\t\t\v\rhref="a.png"\tsize=10>') == 
+          [('a', {'href': 'a.png', 'size': '10'})])
 
   s = doc1
   s2 = doc1.replace(f('"'), f("'"))   # Test single quotes, too.
